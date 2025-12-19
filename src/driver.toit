@@ -63,6 +63,7 @@ class Driver:
 
 
   logger_/log.Logger := ?
+  ubx-logger_/log.Logger := ?
   diagnostics_/Diagnostics := Diagnostics --known-satellites=0 --satellites-in-view=0 --signal-quality=0.0 --time-to-first-fix=Duration.ZERO
   location_/GnssLocation? := null
   adapter_/Adapter_ := ?
@@ -104,8 +105,10 @@ class Driver:
 
   constructor reader writer logger=log.default
       --auto-run/bool=true
-      --force-protocol-version/string?=null:
+      --force-protocol-version/string?=null
+      --hw-reset/bool=true:
     logger_ = logger.with-name "ublox-gnss"
+    ubx-logger_ = logger.with-name "ubx"
 
     if reader is old-reader.Reader:
       reader = io.Reader.adapt reader
@@ -115,9 +118,16 @@ class Driver:
 
     adapter_ = Adapter_ reader writer logger
 
+    // Hardware reset - useful if running multiple tests without power reset.
+    if hw-reset:
+      reset --mode=4
+
     if auto-run:
       // Start message receiver task (and wait for it to start).
       run
+
+      // Start debug messages in UBX firmware:
+      send-enable-inf-messages
 
       // Get device type info, before sending any commands.
       send-get-mon-ver_
@@ -179,9 +189,11 @@ class Driver:
           else if message is ubx-message.AckNak:
             process-ack-nak-message_ message as ubx-message.AckNak
 
+          else if message is ubx-message.CfgInf:
+            process-cfg-inf-message_ message as ubx-message.CfgInf
+          else if message is ubx-message.CfgMsg:
+            process-cfg-msg-message_ message as ubx-message.CfgMsg
           else if message is ubx-message.MonVer:
-            // If a command was waiting for the response, pass it
-            command-latch_.set (message as ubx-message.MonVer)
             process-mon-ver_ message as ubx-message.MonVer
 
           else if message is ubx-message.NavSvInfo:
@@ -201,6 +213,18 @@ class Driver:
           else if message is ubx-message.NavTimeUtc:
             process-nav-time-utc_ message as ubx-message.NavTimeUtc
 
+          // UBX Software Messages will just be displayed.
+          else if message is ubx-message.InfDebug:
+            ubx-logger_.debug (message as ubx-message.InfDebug).text
+          else if message is ubx-message.InfError:
+            ubx-logger_.error (message as ubx-message.InfError).text
+          else if message is ubx-message.InfNotice:
+            ubx-logger_.info (message as ubx-message.InfNotice).text
+          else if message is ubx-message.InfTest:
+            ubx-logger_.info (message as ubx-message.InfTest).text
+          else if message is ubx-message.InfWarning:
+            ubx-logger_.warn (message as ubx-message.InfWarning).text
+
           else:
             logger_.debug  "Driver received UNHANDLED message type: $message"
 
@@ -210,14 +234,20 @@ class Driver:
   /**
   Resets the driver.
 
-  Reset should be called when the driver is not actively running.  Otherwise
-    some messages will be lost - may or may not be a problem depending on the
-    use case.
+  Reset should be called when the message receiver is not actively running,
+    otherwise some messages will be lost.  (may or may not be a problem
+    depending on the use case.)
+
+  Set $mode to 1 (default) "Controlled Software Reset" restart the software
+    but fix and satellite information is not lost. Set $mode to 4 for a hardware
+    restart via watchdog after a shutdown (loses fix and tracking information).
   */
-  reset -> none:
-    adapter_.reset
+  reset --mode/int=1 -> none:
+    logger_.debug "sending reset message (type $mode)"
+    adapter_.reset --mode=mode
     time-to-first-fix_ = Duration.ZERO
     location_ = null
+    sleep --ms=200
 
   /**
   Stops the message receiver task and shuts down the adapter.
@@ -233,13 +263,22 @@ class Driver:
   The sent CFG command didn't work - reasons are not given.
   */
   process-ack-nak-message_ message/ubx-message.AckNak -> none:
-    //logger_.debug "Received AckNak message." --tags={"class": message.class-id, "message": message.message-id}
+    //logger_.debug "received AckNak message" --tags={"class": message.class-id, "message": message.message-id}
     command-latch_.set (message as ubx-message.AckNak)
 
   /** Processor for recieved UBX-ACK-ACK messages. */
   process-ack-ack-message_ message/ubx-message.AckAck -> none:
-    //logger_.debug "Received AckAck message." --tags={"class": message.class-id, "message": message.message-id}
+    //logger_.debug "received AckAck message" --tags={"class": message.class-id, "message": message.message-id}
     command-latch_.set (message as ubx-message.AckAck)
+
+  /** Processor for recieved UBX-CFG-INF messages. */
+  process-cfg-inf-message_ message/ubx-message.CfgInf -> none:
+    //logger_.debug "received CfgInf message" --tags={"message": message}
+    command-latch_.set (message as ubx-message.CfgInf)
+
+  process-cfg-msg-message_ message/ubx-message.CfgMsg -> none:
+    //logger_.debug "received CfgMsg message" --tags={"message": message}
+    command-latch_.set (message as ubx-message.CfgMsg)
 
   /** Processor for recieved UBX-NAV-SOL messages. */
   process-nav-sol_ message/ubx-message.NavSol -> none:
@@ -350,8 +389,6 @@ class Driver:
   /**
   Processor for recieved UBX-NAV-SAT satellite info messages. (<=M7) */
   process-nav-svinfo_ message/ubx-message.NavSvInfo:
-    //logger_.debug "Received NavSvInfo message." --tags={"satellite-count" : message.satellite-count}
-
     cnos ::= []
     satellite-count ::= message.satellite-count
     satellite-count.repeat: | index |
@@ -376,9 +413,13 @@ class Driver:
   /** Processor for recieved UBX-MON-VER messages. */
   process-mon-ver_ message/ubx-message.MonVer -> none:
     // Determine protocol version (include fallback)
+    command-latch_.set (message as ubx-message.MonVer)
     device-protocol-version := supported-protocol-version message
     device-protocol-version_ = device-protocol-version
-    logger_.debug "Received MonVer message." --tags={"sw-ver": message.sw-version, "hw-ver": message.hw-version, "prot-ver": device-protocol-version}
+    logger_.debug "received MON-VER message" --tags={
+      "sw-ver": message.sw-version,
+      "hw-ver": message.hw-version,
+      "prot-ver": device-protocol-version}
 
   /**
   Sends subscriptions for required messages to discover current location.
@@ -402,29 +443,35 @@ class Driver:
 
     if prot-ver >= 15.0 :
       logger_.debug "Setting up for M8+ device type."
-
+      // Request NAV Position/Velocity/Time message every 1 second.
       send-set-message-rate_ ubx-message.Message.NAV ubx-message.NavPvt.ID 1
+      // Request NAV Satellite tracking messages every 1 second.
       send-set-message-rate_ ubx-message.Message.NAV ubx-message.NavSat.ID 1
 
     else if prot-ver >= 14.0:
       logger_.debug "Setting up for 7M device type (legacy)."
-
+      // Request Geodetic Position Solution messages every 1 second.
       send-set-message-rate_ ubx-message.Message.NAV ubx-message.NavPosLlh.ID 1  // Legacy Equivalent to NavPvt Messages
+      // Request Satellite tracking messages every 1 second.
       send-set-message-rate_ ubx-message.Message.NAV ubx-message.NavSvInfo.ID 1  // Legacy Equivalent to NavSat Messages
+      // Request position, velocity and time (in ECEF) messages every 1 second.
       send-set-message-rate_ ubx-message.Message.NAV ubx-message.NavSol.ID 1
 
     else if prot-ver >= 13.0:
       logger_.debug "Setting up for 6M device type (legacy)."
-
+      // Request Geodetic Position Solution messages every 1 second.
       send-set-message-rate_ ubx-message.Message.NAV ubx-message.NavPosLlh.ID 1  // Legacy Equivalent to NavPvt Messages
+      // Request Satellite tracking messages every 1 second.
       send-set-message-rate_ ubx-message.Message.NAV ubx-message.NavSvInfo.ID 1  // Legacy Equivalent to NavSat Messages
+      // Request position, velocity and time (in ECEF) messages every 1 second.
       send-set-message-rate_ ubx-message.Message.NAV ubx-message.NavSol.ID 1
 
     else:
       // Assume all others are M8 or later (for now):
       logger_.debug "Defaulting to M8 Device Type."
-
+      // Request NAV Position/Velocity/Time message every 1 second.
       send-set-message-rate_ ubx-message.Message.NAV ubx-message.NavPvt.ID 1
+      // Request NAV Satellite tracking message every 1 second.
       send-set-message-rate_ ubx-message.Message.NAV ubx-message.NavSat.ID 1
 
   /**
@@ -432,11 +479,25 @@ class Driver:
 
   Sends a UBX-CFG message asking for the specified $class-id/$message-id
     message type to be sent at the given $rate.
+
+  If $port not given, rate is set for all ports.
   */
-  send-set-message-rate_ class-id message-id rate -> none:
-    //logger_.debug "Set Message Rate." --tags={"class": class-id, "message": message-id, "rate": rate}
-    message := ubx-message.CfgMsg.message-rate --msg-class=class-id --msg-id=message-id --rate=rate
-    send-message_ message
+  send-set-message-rate_ class-id message-id rate --port/int=-1 -> none:
+    // Poll for a UBX-CFG-MSG
+    message := ubx-message.CfgMsg.poll --msg-class=class-id --msg-id=message-id
+    cfg-message := (send-message_ message) as ubx-message.CfgMsg
+
+    // For the specific port type, set the rate.
+    cfg-message.set-rate port --rate=rate
+
+    // Send the adjusted UBX-CFG-MSG message back to set the configuration.
+    cfg-response := send-message_ cfg-message
+
+    // Report only if failure (NAK) or unexpected response type.
+    if cfg-response is ubx-message.AckNak:
+      logger_.debug "send-set-message-rate_ FAILURE" --tags={"message":"$message","response":"$cfg-response"}
+    else if not (cfg-response is ubx-message.AckAck):
+      logger_.debug "send-set-message-rate_ UNEXPECTED" --tags={"message":"$message", "response":"$cfg-response"}
 
   /**
   Sends a request for device information, using UBX-MON-VER message.
@@ -447,7 +508,41 @@ class Driver:
     send-message_ message
 
   /**
-  Sends various types of CFG messages, and waits for the response.
+  Enables UBX debugging messages, using UBX-CFG-INF message.
+  */
+  send-enable-inf-messages -> none:
+    //logger_.debug "Send UBX-CFG-INF poll (Enable INFO, all outputs)."
+    message := ubx-message.CfgInf.poll
+    cfg-message := (send-message_ message) as ubx-message.CfgInf
+
+    // Now we have a returned UBX-CFG-INF message, adjust it and send it back.
+    cfg-message.enable-all
+
+    // Send adjusted CFG-INF message back to set the configuration.
+    cfg-response := send-message_ cfg-message
+
+    // Determine and display the result.
+    if cfg-response is ubx-message.AckAck:
+      logger_.debug "enabled ubx device debug messages"
+    else if cfg-response is ubx-message.AckNak:
+      logger_.debug "FAILED to enable ubx device debug messages" --tags={"message":"$cfg-response"}
+    else:
+      logger_.debug "UNEXPECTED enabling ubx debug device messages" --tags={"message":"$cfg-response"}
+
+  /** Send a raw byte array to the device, for debug purposes. */
+  send-raw-byte-array byte-array/ByteArray -> none:
+    logger_.debug "sending raw bytearray: $byte-array"
+    command-mutex_.do:
+      adapter_.send-packet byte-array
+
+  /** Send a user created message to the device, for debug purposes. */
+  send-raw-message message/ubx-message.Message -> none:
+    logger_.debug "sending custom message: $message"
+    command-mutex_.do:
+      adapter_.send-packet message.to-byte-array
+
+  /**
+  Sends message, and waits for the response.
 
   Handles logic of success and failure messages, while not blocking other
     message traffic being handled by the driver.
@@ -460,19 +555,19 @@ class Driver:
      would also need latch handling for such messages to avoid always being
      handled via the $COMMAND-TIMEOUT-MS_ timeout path.
   */
-  send-message_ message/ubx-message.Message --return-immediately/bool=false -> none:
+  send-message_ message/ubx-message.Message --return-immediately/bool=false -> ubx-message.Message?:
+    response := message
     command-mutex_.do:
       if return-immediately:
         adapter_.send-packet message.to-byte-array
-        return
+        return null
 
       // Reset the latch to prevent stray ACK/NAK getting used.
       command-latch_ = monitor.Latch
 
-      // todo: try/finally
+      // todo: try/finally.
       // todo: determine if/how we should convert to semphore.
 
-      response := message       // Avoiding 'must be initialised on first use'.
       duration := Duration.ZERO
       exception := catch:
         with-timeout --ms=COMMAND-TIMEOUT-MS_:
@@ -480,10 +575,18 @@ class Driver:
             adapter_.send-packet message.to-byte-array
             response = command-latch_.get
 
+      // Set latch to null if we're not using it.
+      command-latch_ = null
+
       if exception:
         logger_.error "Command timed out. " --tags={"message":"$(message)", "ms":duration.in-ms}
-        return
+        return null
 
+    // Lets have the return message supplied back to the caller to determine
+    // what to do with it.
+    return response
+
+      /*
       if message is ubx-message.CfgMsg:
         if response is ubx-message.AckAck:
           //logger_.debug  "Message Response." --tags={"response":"$(response)","ms":(duration.in-ms)}
@@ -491,7 +594,7 @@ class Driver:
         if response is ubx-message.AckNak:
           logger_.error  "**NEGATIVE** acknowledgement." --tags={"response":"$(response)","ms":(duration.in-ms)}
           return
-
+      */
       // Other response types, if necessary, here.  Not normally required as the
       //   message receiver ($run) sends the message to the appropriate handler.
 
@@ -547,9 +650,14 @@ class Driver:
     rates := #[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
     logger_.debug "disabling default NMEA messages"
     NMEA-MESSAGE-IDS_.values.do:
-      //logger_.debug "Disable NMEA." --tags={"class": NMEA-CLASS-ID, "message": it, "rate": 0}
       message := ubx-message.CfgMsg.per-port --msg-class=NMEA-CLASS-ID_ --msg-id=it --rates=rates
-      send-message_ message
+      cfg-response := send-message_ message
+
+      // Report only if failure or unexpected.
+      if cfg-response is ubx-message.AckNak:
+        logger_.debug "disable NMEA FAILURE" --tags={"msg-id": it,"message":"$cfg-response"}
+      else if not (cfg-response is ubx-message.AckAck):
+        logger_.debug "disable NMEA UNEXPECTED" --tags={"msg-id": it,"message":"$cfg-response"}
 
 
 class Adapter_:
@@ -565,10 +673,10 @@ class Adapter_:
     // Flush all data up to this point.
     wait-until-receiver-available_
 
-  reset -> none:
+  reset --mode/int=1 -> none:
     wait-until-receiver-available_
     // Reset and reload configuration (cold boot + reboot of processes).
-    send-packet (ubx-message.CfgRst --reset-mode=1).to-byte-array
+    send-packet (ubx-message.CfgRst --reset-mode=mode).to-byte-array
     // Wait for the reload to take effect, before flushing stale data.
     // This was tested with 10ms, so using 50ms.
     sleep --ms=50

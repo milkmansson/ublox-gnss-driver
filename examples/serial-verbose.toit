@@ -17,7 +17,7 @@ main:
   // Open serial communication and start driver.
   print "Opening on $BAUD"
   port := uart.Port --tx=TX-PIN --rx=RX-PIN --baud-rate=BAUD
-  driver := ublox-gnss.Driver port.in port.out
+  driver := ublox-gnss.Driver port.in port.out --reset
 
   // Wait for the driver to get version message back for display.
   timeout := catch:
@@ -42,7 +42,7 @@ main:
   location := null
   while not location:
     diags := driver.diagnostics
-    time := "Elapsed: $((Duration --us=(Time.monotonic-us)).in-s)s"
+    time := "Elapsed: $(Duration --us=(Time.monotonic-us))"
     known := "Sats Known: $(diags.known-satellites)"
     sats-iv := "Sats in View: $(diags.satellites-in-view)"
     sig-q := "SigQual: $(diags.signal-quality)"
@@ -50,7 +50,7 @@ main:
     fixtype := ""
 
     if (driver.latest-message.contains "STATUS") and (driver.latest-message["STATUS"] != null):
-      fixtype = "Fix: 0x$(%02x driver.latest-message["STATUS"].gps-fix)"
+      fixtype = "Fix: $(driver.latest-message["STATUS"].fix-type-text)"
 
     print " $time \t $fixtype $known $sats-iv $sig-q $ttff"
     if driver.location:
@@ -61,7 +61,7 @@ main:
   print "Location found:"
   print " Time to First Fix: $(driver.time-to-first-fix)"
   while true:
-    time := "Elapsed: $((Duration --us=(Time.monotonic-us)).in-s)s"
+    time := "Elapsed: $(Duration --us=(Time.monotonic-us))"
     print " $time \t Location: $location ($(max location.horizontal-accuracy location.vertical-accuracy))"
     sleep --ms=3000
     location = driver.location --blocking

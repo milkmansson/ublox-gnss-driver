@@ -17,7 +17,7 @@ main:
   // Open serial communication and start driver.
   print "Opening on $BAUD"
   port := uart.Port --tx=TX-PIN --rx=RX-PIN --baud-rate=BAUD
-  driver := ublox-gnss.Driver port.in port.out --reset
+  driver := ublox-gnss.Driver port.in port.out --hw-reset
 
   // Wait for the driver to get version message back for display.
   timeout := catch:

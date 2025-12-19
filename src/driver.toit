@@ -182,7 +182,7 @@ class Driver:
           message := adapter_.next-message
 
           // Store latest version of messages for other handlers to use.
-          latest-message[message.id-string_] = message
+          latest-message[message.full-name] = message
 
           if message is ubx-message.AckAck:
             process-ack-ack-message_ message as ubx-message.AckAck

@@ -22,11 +22,11 @@ main:
   // Wait for the driver to get version message back for display.
   timeout := catch:
     with-timeout --ms=10_000:
-      while (not driver.latest-message.contains "VER") or (driver.latest-message["VER"] == null):
+      while (not driver.latest-message.contains "UBX-MON-VER") or (driver.latest-message["UBX-MON-VER"] == null):
         sleep --ms=250
 
   if not timeout:
-    version-message := driver.latest-message["VER"]
+    version-message := driver.latest-message["UBX-MON-VER"]
     print "Device detected:"
     print " Hardware Version: $(version-message.hw-version)"
     print " Software Version: $(version-message.sw-version)"
@@ -49,8 +49,8 @@ main:
     ttff := "TTFF: $(diags.time-to-first-fix.in-s)"
     fixtype := ""
 
-    if (driver.latest-message.contains "STATUS") and (driver.latest-message["STATUS"] != null):
-      fixtype = "Fix: $(driver.latest-message["STATUS"].fix-type-text)"
+    if (driver.latest-message.contains "UBX-NAV-STATUS") and (driver.latest-message["UBX-NAV-STATUS"] != null):
+      fixtype = "Fix: $(driver.latest-message["UBX-NAV-STATUS"].fix-type-text)"
 
     print " $time \t $fixtype $known $sats-iv $sig-q $ttff"
     if driver.location:

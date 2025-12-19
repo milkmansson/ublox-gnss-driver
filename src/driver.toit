@@ -485,13 +485,13 @@ class Driver:
   send-set-message-rate_ class-id message-id rate --port/int=-1 -> none:
     // Poll for a UBX-CFG-MSG
     message := ubx-message.CfgMsg.poll --msg-class=class-id --msg-id=message-id
-    cfg-message := (send-message_ message) as ubx-message.CfgMsg
+    cfg-message := (send-message message) as ubx-message.CfgMsg
 
     // For the specific port type, set the rate.
     cfg-message.set-rate port --rate=rate
 
     // Send the adjusted UBX-CFG-MSG message back to set the configuration.
-    cfg-response := send-message_ cfg-message
+    cfg-response := send-message cfg-message
 
     // Report only if failure (NAK) or unexpected response type.
     if cfg-response is ubx-message.AckNak:
@@ -505,7 +505,7 @@ class Driver:
   send-get-mon-ver_ -> none:
     //logger_.debug "Send Version Request Poll."
     message := ubx-message.MonVer.poll
-    send-message_ message
+    send-message message
 
   /**
   Enables UBX debugging messages, using UBX-CFG-INF message.
@@ -513,13 +513,13 @@ class Driver:
   send-enable-inf-messages -> none:
     //logger_.debug "Send UBX-CFG-INF poll (Enable INFO, all outputs)."
     message := ubx-message.CfgInf.poll
-    cfg-message := (send-message_ message) as ubx-message.CfgInf
+    cfg-message := (send-message message) as ubx-message.CfgInf
 
     // Now we have a returned UBX-CFG-INF message, adjust it and send it back.
     cfg-message.enable-all
 
     // Send adjusted CFG-INF message back to set the configuration.
-    cfg-response := send-message_ cfg-message
+    cfg-response := send-message cfg-message
 
     // Determine and display the result.
     if cfg-response is ubx-message.AckAck:
@@ -555,7 +555,7 @@ class Driver:
      would also need latch handling for such messages to avoid always being
      handled via the $COMMAND-TIMEOUT-MS_ timeout path.
   */
-  send-message_ message/ubx-message.Message --return-immediately/bool=false -> ubx-message.Message?:
+  send-message message/ubx-message.Message --return-immediately/bool=false -> ubx-message.Message?:
     response := message
     command-mutex_.do:
       if return-immediately:
@@ -651,7 +651,7 @@ class Driver:
     logger_.debug "disabling default NMEA messages"
     NMEA-MESSAGE-IDS_.values.do:
       message := ubx-message.CfgMsg.per-port --msg-class=NMEA-CLASS-ID_ --msg-id=it --rates=rates
-      cfg-response := send-message_ message
+      cfg-response := send-message message
 
       // Report only if failure or unexpected.
       if cfg-response is ubx-message.AckNak:

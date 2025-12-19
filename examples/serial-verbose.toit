@@ -46,7 +46,7 @@ main:
     known := "Sats Known: $(diags.known-satellites)"
     sats-iv := "Sats in View: $(diags.satellites-in-view)"
     sig-q := "SigQual: $(diags.signal-quality)"
-    ttff := "TTFF: $(diags.time-to-first-fix.in-s)"
+    ttff := "TTFF: $(diags.time-to-first-fix)"
     fixtype := ""
 
     if (driver.latest-message.contains "UBX-NAV-STATUS") and (driver.latest-message["UBX-NAV-STATUS"] != null):

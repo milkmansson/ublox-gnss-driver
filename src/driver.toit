@@ -317,7 +317,7 @@ class Driver:
   Processor for recieved UBX-NAV-PVT position messages. (M8+)
 
   Data obtained by this message is available in object.Location.  Message in
-    its raw format is available in $latest-message["POSLLH"].
+    its raw format is available in $latest-message["UBX-NAV-PVT"].
   */
   process-nav-pvt_ message/ubx-message.NavPvt -> none:
     if message.is-gnss-fix:
@@ -338,7 +338,7 @@ class Driver:
   Processor for recieved UBX-NAV-POSLLH position messages. (M6/M7)
 
   Data obtained by this message is available in object.Location.  Message in
-    its raw format is available in $latest-message["POSLLH"].
+    its raw format is available in $latest-message["UBX-NAV-POSLLH"].
   */
   process-nav-posllh_ message/ubx-message.NavPosLlh:
     //logger_.debug "Received NavPosLlh message." --tags={"latitude" : message.latitude-deg , "longitude" : message.longitude-deg, "itow": message.itow }
@@ -348,11 +348,11 @@ class Driver:
     // filling the existing structure with information from latest recieved of
     // other message types.
     status-message/ubx-message.NavStatus? := null
-    if latest-message.contains "STATUS":
-      status-message = latest-message["STATUS"]
+    if latest-message.contains "UBX-NAV-STATUS":
+      status-message = latest-message["UBX-NAV-STATUS"]
     time-message/ubx-message.NavTimeUtc? := null
-    if latest-message.contains "TIMEUTC":
-      time-message = latest-message["TIMEUTC"]
+    if latest-message.contains "UBX-NAV-TIMEUTC":
+      time-message = latest-message["UBX-NAV-TIMEUTC"]
 
     // If fix is right/enough, give the data back to the destination object.
     // Yes there is a risk that the fix could stop, and the location data
